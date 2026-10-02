@@ -376,7 +376,8 @@ const BookerComponent = ({
                   isMobile={isMobile}
                   nextSlots={nextSlots}
                   renderOverlay={() => {
-                    if (isEmbed) return null;
+                    // Signups are closed, so for logged-out visitors the toggle only led to a login page.
+                    if (isEmbed || !hasSession) return null;
                     return (
                       <OverlayCalendar
                         isOverlayCalendarEnabled={isOverlayCalendarEnabled}
