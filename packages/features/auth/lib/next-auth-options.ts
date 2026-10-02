@@ -106,6 +106,17 @@ const ORGANIZATIONS_AUTOLINK =
 const usernameSlug = (username: string) => `${slugify(username)}-${randomString(6).toLowerCase()}`;
 const getDomainFromEmail = (email: string): string => email.split("@")[1];
 
+// OAuth and SAML logins create accounts on first sign-in without checking NEXT_PUBLIC_DISABLE_SIGNUP,
+// so self-hosted instances need a domain allowlist to keep outside accounts out.
+const isEmailDomainAllowedToSignIn = (email: string): boolean => {
+  const allowedDomains = (process.env.ALLOWED_LOGIN_DOMAINS || "")
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowedDomains.length === 0) return true;
+  return allowedDomains.includes(getDomainFromEmail(email)?.toLowerCase());
+};
+
 const loginWithTotp = async (email: string) =>
   `/auth/login?totp=${encodeURIComponent(await (await import("./signJwt")).default({ email }))}`;
 
@@ -866,6 +877,14 @@ export const getOptions = ({
         if (!isEmailVerified && idP !== IdentityProvider.AZUREAD) {
           log.error("Attention: SAML/Google User email is not verified in the IdP", safeStringify({ user }));
           return "/auth/error?error=unverified-email";
+        }
+
+        if (!isEmailDomainAllowedToSignIn(user.email)) {
+          log.warn("callbacks:signIn - email domain not allowed", {
+            emailDomain: getDomainFromEmail(user.email),
+            provider: account.provider,
+          });
+          return "/auth/error?error=domain-not-allowed";
         }
 
         let existingUser = await prisma.user.findFirst({

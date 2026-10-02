@@ -656,6 +656,65 @@ describe("Azure AD signIn callback", () => {
     });
   });
 
+  describe("ALLOWED_LOGIN_DOMAINS allowlist", () => {
+    const googleSignIn = (email: string): Promise<boolean | string> =>
+      signInCallback({
+        user: { id: "1", email, name: "User", emailVerified: null },
+        account: { provider: "google", providerAccountId: "google-123", type: "oauth" },
+        profile: { email_verified: true },
+      });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it("rejects a domain outside the allowlist before creating an account", async () => {
+      vi.stubEnv("ALLOWED_LOGIN_DOMAINS", "opendeved.net, ekitabu.com");
+
+      const result = await googleSignIn("someone@gmail.com");
+
+      expect(result).toBe("/auth/error?error=domain-not-allowed");
+      expect(mockPrismaUserCreate).not.toHaveBeenCalled();
+    });
+
+    it("rejects a lookalike domain that only ends with an allowed one", async () => {
+      vi.stubEnv("ALLOWED_LOGIN_DOMAINS", "opendeved.net");
+
+      const result = await googleSignIn("someone@evilopendeved.net");
+
+      expect(result).toBe("/auth/error?error=domain-not-allowed");
+    });
+
+    it("allows an allowlisted domain regardless of case", async () => {
+      vi.stubEnv("ALLOWED_LOGIN_DOMAINS", "opendeved.net, ekitabu.com");
+      mockPrismaUserFindFirst.mockResolvedValue({
+        id: 1,
+        email: "Someone@EKITABU.com",
+        accounts: [{ provider: "google" }],
+        twoFactorEnabled: false,
+        identityProvider: "GOOGLE",
+      });
+
+      const result = await googleSignIn("Someone@EKITABU.com");
+
+      expect(result).toBe(true);
+    });
+
+    it("allows any domain when the allowlist is unset", async () => {
+      mockPrismaUserFindFirst.mockResolvedValue({
+        id: 1,
+        email: "someone@gmail.com",
+        accounts: [{ provider: "google" }],
+        twoFactorEnabled: false,
+        identityProvider: "GOOGLE",
+      });
+
+      const result = await googleSignIn("someone@gmail.com");
+
+      expect(result).toBe(true);
+    });
+  });
+
   describe("Azure AD profile photo on new user (signIn callback)", () => {
     const baseUser = { id: "1", email: "newuser@example.com", name: "New User", emailVerified: null };
 
