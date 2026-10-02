@@ -3,6 +3,7 @@
   "globalDependencies": ["yarn.lock"],
   "globalEnv": [
     "ALLOWED_HOSTNAMES",
+    "ALLOWED_LOGIN_DOMAINS",
     "ANALYZE",
     "AWAITING_PAYMENT_EMAIL_DELAY_MINUTES",
     "API_KEY_PREFIX",

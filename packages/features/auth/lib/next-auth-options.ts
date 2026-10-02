@@ -879,9 +879,11 @@ export const getOptions = ({
           return "/auth/error?error=unverified-email";
         }
 
-        if (!isEmailDomainAllowedToSignIn(user.email)) {
+        // For an already-linked account NextAuth passes the stored user, so check the email the IdP just returned.
+        const idpEmail = profile?.email ?? user.email;
+        if (!isEmailDomainAllowedToSignIn(idpEmail)) {
           log.warn("callbacks:signIn - email domain not allowed", {
-            emailDomain: getDomainFromEmail(user.email),
+            emailDomain: getDomainFromEmail(idpEmail),
             provider: account.provider,
           });
           return "/auth/error?error=domain-not-allowed";

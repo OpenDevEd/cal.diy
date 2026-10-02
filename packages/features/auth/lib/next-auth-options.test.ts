@@ -657,11 +657,11 @@ describe("Azure AD signIn callback", () => {
   });
 
   describe("ALLOWED_LOGIN_DOMAINS allowlist", () => {
-    const googleSignIn = (email: string): Promise<boolean | string> =>
+    const googleSignIn = (email: string, googleEmail: string = email): Promise<boolean | string> =>
       signInCallback({
         user: { id: "1", email, name: "User", emailVerified: null },
         account: { provider: "google", providerAccountId: "google-123", type: "oauth" },
-        profile: { email_verified: true },
+        profile: { email_verified: true, email: googleEmail },
       });
 
     afterEach(() => {
@@ -681,6 +681,14 @@ describe("Azure AD signIn callback", () => {
       vi.stubEnv("ALLOWED_LOGIN_DOMAINS", "opendeved.net");
 
       const result = await googleSignIn("someone@evilopendeved.net");
+
+      expect(result).toBe("/auth/error?error=domain-not-allowed");
+    });
+
+    it("checks the email Google returns, not the stored email of a linked account", async () => {
+      vi.stubEnv("ALLOWED_LOGIN_DOMAINS", "opendeved.net");
+
+      const result = await googleSignIn("member@opendeved.net", "member@gmail.com");
 
       expect(result).toBe("/auth/error?error=domain-not-allowed");
     });
