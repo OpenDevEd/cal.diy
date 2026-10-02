@@ -29,6 +29,7 @@ import { defaultCookies } from "@calcom/lib/default-cookies";
 import { isENVDev } from "@calcom/lib/env";
 import logger from "@calcom/lib/logger";
 import { randomString } from "@calcom/lib/random";
+import { usernameCheck } from "@calcom/lib/server/username";
 import { safeStringify } from "@calcom/lib/safeStringify";
 import { hashEmail } from "@calcom/lib/server/PiiHasher";
 import slugify from "@calcom/lib/slugify";
@@ -104,6 +105,55 @@ const ORGANIZATIONS_AUTOLINK =
   process.env.ORGANIZATIONS_AUTOLINK === "1" || process.env.ORGANIZATIONS_AUTOLINK === "true";
 
 const usernameSlug = (username: string) => `${slugify(username)}-${randomString(6).toLowerCase()}`;
+
+// Top-level routes and public folders win over /[username], so these aliases would give an unreachable profile.
+// ponytail: copied by hand from apps/web/app and apps/web/public (Oct 2026); add new top-level routes after upstream merges.
+const RESERVED_ROUTE_USERNAMES: ReadonlySet<string> = new Set([
+  "api",
+  "app-categories",
+  "app-store",
+  "apps",
+  "auth",
+  "availability",
+  "booking",
+  "booking-successful",
+  "bookings",
+  "cache",
+  "country-flag-icons",
+  "d",
+  "e2e",
+  "email-clients",
+  "emails",
+  "enterprise",
+  "event-types",
+  "fonts",
+  "gated-features",
+  "getting-started",
+  "icons",
+  "maintenance",
+  "members",
+  "more",
+  "onboarding",
+  "payment",
+  "product-cards",
+  "refer",
+  "reschedule",
+  "router",
+  "settings",
+  "signup",
+  "tips",
+  "upgrade",
+  "video",
+]);
+
+// New identity-provider users get their email alias as username (elena@example.com -> elena). If that is
+// taken, use the same free variant the signup form suggests (elena001).
+const usernameFromEmail = async (email: string, name: string): Promise<string> => {
+  const alias = slugify(email.split("@")[0]);
+  if (!alias || RESERVED_ROUTE_USERNAMES.has(alias)) return usernameSlug(name);
+  const { available, suggestedUsername } = await usernameCheck(alias);
+  return available ? alias : suggestedUsername;
+};
 const getDomainFromEmail = (email: string): string => email.split("@")[1];
 
 // OAuth and SAML logins create accounts on first sign-in without checking NEXT_PUBLIC_DISABLE_SIGNUP,
@@ -1139,28 +1189,37 @@ export const getOptions = ({
         const { orgUsername, orgId } = await checkIfUserShouldBelongToOrg(idP, user.email);
 
         try {
-          const newUsername = orgId ? slugify(orgUsername) : usernameSlug(user.name);
-          const newUser = await prisma.user.create({
-            data: {
-              // Slugify the incoming name and append a few random characters to
-              // prevent conflicts for users with the same name.
-              username: newUsername,
-              emailVerified: new Date(Date.now()),
-              name: user.name,
-              ...(user.image && { avatarUrl: user.image }),
-              email: user.email,
-              identityProvider: idP,
-              identityProviderId: account.providerAccountId,
-              ...(orgId && {
-                verified: true,
-                organization: { connect: { id: orgId } },
-                teams: {
-                  create: { role: MembershipRole.MEMBER, accepted: true, team: { connect: { id: orgId } } },
-                },
-              }),
-              creationSource: CreationSource.WEBAPP,
-            },
-          });
+          const newUserEmail = user.email;
+          const createUser = (username: string) =>
+            prisma.user.create({
+              data: {
+                username,
+                emailVerified: new Date(Date.now()),
+                name: user.name,
+                ...(user.image && { avatarUrl: user.image }),
+                email: newUserEmail,
+                identityProvider: idP,
+                identityProviderId: account.providerAccountId,
+                ...(orgId && {
+                  verified: true,
+                  organization: { connect: { id: orgId } },
+                  teams: {
+                    create: { role: MembershipRole.MEMBER, accepted: true, team: { connect: { id: orgId } } },
+                  },
+                }),
+                creationSource: CreationSource.WEBAPP,
+              },
+            });
+          const newUsername = orgId ? slugify(orgUsername) : await usernameFromEmail(user.email, user.name);
+          let newUser: Awaited<ReturnType<typeof createUser>>;
+          try {
+            newUser = await createUser(newUsername);
+          } catch (err) {
+            // The availability check can miss a username (a concurrent sign-up or a locked user), so fall back
+            // to the random-suffixed form instead of failing the sign-up.
+            if ((err as { code?: string })?.code !== "P2002") throw err;
+            newUser = await createUser(usernameSlug(user.name));
+          }
           const linkAccountNewUserData = AdapterAccountPresenter.fromCalAccount(
             account,
             newUser.id,

@@ -185,6 +185,11 @@ vi.mock("./signJwt", async (importOriginal) => ({
   default: vi.fn().mockResolvedValue("mock-jwt"),
 }));
 
+const mockUsernameCheck = vi.fn();
+vi.mock("@calcom/lib/server/username", () => ({
+  usernameCheck: (...args: unknown[]) => mockUsernameCheck(...args),
+}));
+
 vi.mock("./dub", () => ({
   dub: { track: { lead: vi.fn() } },
 }));
@@ -597,6 +602,7 @@ describe("Azure AD signIn callback", () => {
     mockPrismaUserUpdate.mockResolvedValue({});
     mockPrismaTeamFindFirst.mockResolvedValue(null);
     mockUpdateProfilePhotoMicrosoft.mockResolvedValue(undefined);
+    mockUsernameCheck.mockResolvedValue({ available: true, premium: false, suggestedUsername: "" });
 
     // Setup mock adapter
     const adapterModule = await import("./next-auth-custom-adapter");
@@ -824,6 +830,56 @@ describe("Azure AD signIn callback", () => {
       const result = await googleSignIn("someone@gmail.com");
 
       expect(result).toBe(true);
+    });
+  });
+
+  describe("username for a new identity-provider user", () => {
+    const newGoogleUser = (): Promise<boolean | string> =>
+      signInCallback({
+        user: { id: "1", email: "Elena@opendeved.net", name: "Elena Goretskaia", emailVerified: null },
+        account: { provider: "google", providerAccountId: "google-new", type: "oauth" },
+        profile: { email_verified: true, email: "Elena@opendeved.net" },
+      });
+
+    beforeEach(() => {
+      mockPrismaUserFindFirst.mockResolvedValue(null);
+      mockPrismaUserCreate.mockResolvedValue({ id: 200, email: "Elena@opendeved.net", twoFactorEnabled: false });
+    });
+
+    it("uses the email alias when it is free", async () => {
+      await newGoogleUser();
+
+      expect(mockUsernameCheck).toHaveBeenCalledWith("elena");
+      expect(mockPrismaUserCreate.mock.calls[0][0].data.username).toBe("elena");
+    });
+
+    it("uses the suggested variant when the alias is taken", async () => {
+      mockUsernameCheck.mockResolvedValue({ available: false, premium: false, suggestedUsername: "elena001" });
+
+      await newGoogleUser();
+
+      expect(mockPrismaUserCreate.mock.calls[0][0].data.username).toBe("elena001");
+    });
+
+    it("does not take an alias that matches an app route", async () => {
+      await signInCallback({
+        user: { id: "1", email: "bookings@opendeved.net", name: "Bookings Team", emailVerified: null },
+        account: { provider: "google", providerAccountId: "google-new", type: "oauth" },
+        profile: { email_verified: true, email: "bookings@opendeved.net" },
+      });
+
+      expect(mockPrismaUserCreate.mock.calls[0][0].data.username).toBe("bookings-team-abc123");
+    });
+
+    it("retries with the random-suffixed username when the chosen one is already in the database", async () => {
+      mockPrismaUserCreate
+        .mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }))
+        .mockResolvedValueOnce({ id: 201, email: "Elena@opendeved.net", twoFactorEnabled: false });
+
+      const result = await newGoogleUser();
+
+      expect(result).toBe(true);
+      expect(mockPrismaUserCreate.mock.calls[1][0].data.username).toBe("elena-goretskaia-abc123");
     });
   });
 
