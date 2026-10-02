@@ -160,7 +160,7 @@ const checkIfUserShouldBelongToOrg = async (idP: IdentityProvider, email: string
  * Extracted for testability
  */
 export async function authorizeCredentials(
-  credentials: Record<"email" | "password" | "totpCode" | "backupCode", string> | undefined
+  credentials: Record<"email" | "password" | "totpCode" | "backupCode" | "totpToken", string> | undefined
 ): Promise<User | null> {
   log.debug("CredentialsProvider:credentials:authorize", safeStringify({ credentials }));
   if (!credentials) {
@@ -186,15 +186,24 @@ export async function authorizeCredentials(
     identifier: hashEmail(user.email),
   });
 
-  // Users without a password must use their identity provider (Google/SAML) to login
-  if (!user.password?.hash) {
-    throw new Error(ErrorCode.IncorrectEmailPassword);
-  }
+  if (credentials.totpToken) {
+    // Second step of an identity-provider login: the signIn callback issued this token after the IdP
+    // authenticated the user, so it stands in for the password. 2FA is still enforced below.
+    const verifiedEmail = await (await import("./signJwt")).verifyTotpLoginJwt(credentials.totpToken);
+    if (!user.twoFactorEnabled || verifiedEmail?.toLowerCase() !== user.email.toLowerCase()) {
+      throw new Error(ErrorCode.IncorrectEmailPassword);
+    }
+  } else {
+    // Users without a password must use their identity provider (Google/SAML) to login
+    if (!user.password?.hash) {
+      throw new Error(ErrorCode.IncorrectEmailPassword);
+    }
 
-  // Always verify password for users who have one
-  const isCorrectPassword = await verifyPassword(credentials.password, user.password.hash);
-  if (!isCorrectPassword) {
-    throw new Error(ErrorCode.IncorrectEmailPassword);
+    // Always verify password for users who have one
+    const isCorrectPassword = await verifyPassword(credentials.password, user.password.hash);
+    if (!isCorrectPassword) {
+      throw new Error(ErrorCode.IncorrectEmailPassword);
+    }
   }
 
   if (user.twoFactorEnabled && credentials.backupCode) {
@@ -307,6 +316,7 @@ export const CalComCredentialsProvider = CredentialsProvider({
     password: { label: "Password", type: "password", placeholder: "Your super secure password" },
     totpCode: { label: "Two-factor Code", type: "input", placeholder: "Code from authenticator app" },
     backupCode: { label: "Backup Code", type: "input", placeholder: "Two-factor backup code" },
+    totpToken: { label: "Identity provider login token", type: "hidden" },
   },
   authorize: authorizeCredentials,
 });

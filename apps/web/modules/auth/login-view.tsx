@@ -34,6 +34,7 @@ interface LoginValues {
   totpCode: string;
   backupCode: string;
   csrfToken: string;
+  totpToken?: string;
 }
 
 const MicrosoftIcon = () => (
@@ -120,7 +121,14 @@ export default function Login({
     })
     // Passthrough other fields like totpCode
     .passthrough();
-  const methods = useForm<LoginValues>({ resolver: zodResolver(formSchema) });
+  // After an identity-provider login the page opens on the 2FA step, so the email field is never
+  // rendered; send the email and the signIn token as defaults instead.
+  const methods = useForm<LoginValues>({
+    resolver: zodResolver(formSchema),
+    defaultValues: totpEmail
+      ? { email: totpEmail, totpToken: searchParams?.get("totp") ?? undefined }
+      : undefined,
+  });
   const { register, formState } = methods;
   const [twoFactorRequired, setTwoFactorRequired] = useState(!!totpEmail || false);
   const [twoFactorLostAccess, setTwoFactorLostAccess] = useState(false);

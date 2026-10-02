@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { IdentityProvider, UserPermissionRole } from "@calcom/prisma/enums";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCode } from "./ErrorCode";
@@ -179,7 +180,8 @@ vi.mock("next-auth/jwt", () => ({
   encode: vi.fn(),
 }));
 
-vi.mock("./signJwt", () => ({
+vi.mock("./signJwt", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./signJwt")>()),
   default: vi.fn().mockResolvedValue("mock-jwt"),
 }));
 
@@ -328,6 +330,108 @@ describe("CredentialsProvider authorize", () => {
           password: "password123",
           totpCode: "123456",
         } as any)
+      ).rejects.toThrow(ErrorCode.IncorrectEmailPassword);
+    });
+  });
+
+  describe("Identity-provider 2FA step (totpToken)", () => {
+    const signRealToken = async (email: string): Promise<string> => {
+      const actual = await vi.importActual<typeof import("./signJwt")>("./signJwt");
+      return actual.default({ email });
+    };
+
+    beforeEach(async () => {
+      vi.stubEnv("CALENDSO_ENCRYPTION_KEY", "k".repeat(32));
+      const { symmetricDecrypt } = await import("@calcom/lib/crypto");
+      vi.mocked(symmetricDecrypt).mockReturnValue("a".repeat(32));
+      const { totpAuthenticatorCheck } = await import("@calcom/lib/totp");
+      vi.mocked(totpAuthenticatorCheck).mockReturnValue(true);
+    });
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    type Credentials = Parameters<typeof authorizeCredentials>[0];
+    const credentials = (fields: Partial<NonNullable<Credentials>>): Credentials => fields as Credentials;
+
+    const ssoUserWith2FA = (overrides: Record<string, unknown> = {}): ReturnType<typeof createMockUser> =>
+      createMockUser({
+        identityProvider: IdentityProvider.GOOGLE,
+        password: null,
+        twoFactorEnabled: true,
+        twoFactorSecret: "encrypted-secret",
+        ...overrides,
+      });
+
+    it("logs in with a valid token and 2FA code without a password", async () => {
+      mockFindByEmailAndIncludeProfilesAndPassword.mockResolvedValue(ssoUserWith2FA());
+
+      const user = await authorizeCredentials(
+        credentials({
+          email: "test@example.com",
+          totpToken: await signRealToken("test@example.com"),
+          totpCode: "123456",
+        })
+      );
+
+      expect(user).toMatchObject({ email: "test@example.com" });
+      expect(verifyPassword).not.toHaveBeenCalled();
+    });
+
+    it("still requires the 2FA code", async () => {
+      mockFindByEmailAndIncludeProfilesAndPassword.mockResolvedValue(ssoUserWith2FA());
+
+      await expect(
+        authorizeCredentials(
+          credentials({
+            email: "test@example.com",
+            totpToken: await signRealToken("test@example.com"),
+          })
+        )
+      ).rejects.toThrow(ErrorCode.SecondFactorRequired);
+    });
+
+    it("rejects a token issued for another email", async () => {
+      mockFindByEmailAndIncludeProfilesAndPassword.mockResolvedValue(ssoUserWith2FA());
+
+      await expect(
+        authorizeCredentials(
+          credentials({
+            email: "test@example.com",
+            totpToken: await signRealToken("someone-else@example.com"),
+            totpCode: "123456",
+          })
+        )
+      ).rejects.toThrow(ErrorCode.IncorrectEmailPassword);
+    });
+
+    it("rejects a forged token", async () => {
+      mockFindByEmailAndIncludeProfilesAndPassword.mockResolvedValue(ssoUserWith2FA());
+
+      await expect(
+        authorizeCredentials(
+          credentials({
+            email: "test@example.com",
+            totpToken: "not-a-real-token",
+            totpCode: "123456",
+          })
+        )
+      ).rejects.toThrow(ErrorCode.IncorrectEmailPassword);
+    });
+
+    it("rejects a token for a user without 2FA", async () => {
+      mockFindByEmailAndIncludeProfilesAndPassword.mockResolvedValue(
+        ssoUserWith2FA({ twoFactorEnabled: false, twoFactorSecret: null })
+      );
+
+      await expect(
+        authorizeCredentials(
+          credentials({
+            email: "test@example.com",
+            totpToken: await signRealToken("test@example.com"),
+          })
+        )
       ).rejects.toThrow(ErrorCode.IncorrectEmailPassword);
     });
   });
