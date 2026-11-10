@@ -868,6 +868,42 @@ describe("createEvent", () => {
 
     log.info("createEvent with hangoutLink patch test passed");
   });
+
+  test("still returns the created event when Google rejects the hangoutLink patch", async () => {
+    const calendarService = BuildCalendarService(mockCredential);
+    setFullMockOAuthManagerRequest();
+
+    const mockHangoutLink = "https://meet.google.com/abc-defg-hij";
+    calendarMock.calendar_v3.Calendar().events.insert = vi.fn().mockResolvedValue({
+      data: { id: "mock-event-with-hangout", hangoutLink: mockHangoutLink },
+    });
+    calendarMock.calendar_v3.Calendar().events.patch = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error("Rate Limit Exceeded"), { code: 403 }));
+
+    const result = await calendarService.createEvent(
+      {
+        type: "test-event-type",
+        uid: "cal-event-uid-hangout",
+        title: "Test Meeting with Hangout",
+        startTime: "2024-06-15T10:00:00Z",
+        endTime: "2024-06-15T11:00:00Z",
+        organizer: {
+          id: 1,
+          name: "Test Organizer",
+          email: "organizer@example.com",
+          timeZone: "UTC",
+          language: { translate: (key: string) => key, locale: "en" },
+        },
+        attendees: [],
+        location: MeetLocationType,
+      },
+      mockCredential.id
+    );
+
+    expect(result.id).toBe("mock-event-with-hangout");
+    expect(result.additionalInfo?.hangoutLink).toBe(mockHangoutLink);
+  });
 });
 
 describe("updateEvent", () => {

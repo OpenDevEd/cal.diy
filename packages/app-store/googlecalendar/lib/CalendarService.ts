@@ -296,26 +296,7 @@ class GoogleCalendarService implements Calendar {
       }
 
       if (event && event.id && event.hangoutLink) {
-        await calendar.events.patch({
-          // Update the same event but this time we know the hangout link
-          calendarId: selectedCalendar,
-          eventId: event.id || "",
-          requestBody: {
-            description: getRichDescription({
-              ...calEvent,
-              additionalInformation: { hangoutLink: event.hangoutLink },
-            }),
-            location: getLocation({
-              videoCallData: calEvent.videoCallData,
-              additionalInformation: {
-                ...calEvent.additionalInformation,
-                hangoutLink: event.hangoutLink,
-              },
-              location: calEvent.location,
-              uid: calEvent.uid,
-            }),
-          },
-        });
+        await this.addHangoutLinkToEvent(calendar, selectedCalendar, event.id, event.hangoutLink, calEvent);
       }
 
       return {
@@ -344,6 +325,39 @@ class GoogleCalendarService implements Calendar {
       throw error;
     }
   }
+
+  // The event already exists with its Meet link; this only rewrites its description and location text.
+  // Google often answers this follow-up call with 403 rateLimitExceeded, and throwing here would mark
+  // the booking's calendar step as failed, which skips every confirmation email.
+  private async addHangoutLinkToEvent(
+    calendar: calendar_v3.Calendar,
+    calendarId: string,
+    eventId: string,
+    hangoutLink: string,
+    calEvent: CalendarServiceEvent
+  ): Promise<void> {
+    try {
+      await calendar.events.patch({
+        calendarId,
+        eventId,
+        requestBody: {
+          description: getRichDescription({ ...calEvent, additionalInformation: { hangoutLink } }),
+          location: getLocation({
+            videoCallData: calEvent.videoCallData,
+            additionalInformation: { ...calEvent.additionalInformation, hangoutLink },
+            location: calEvent.location,
+            uid: calEvent.uid,
+          }),
+        },
+      });
+    } catch (error) {
+      this.log.warn(
+        "Could not add the Meet link to the Google Calendar event text",
+        safeStringify({ error, calendarId, eventId })
+      );
+    }
+  }
+
   async getFirstEventInRecurrence(
     recurringEventId: string | null | undefined,
     selectedCalendar: string,
@@ -417,26 +431,7 @@ class GoogleCalendarService implements Calendar {
       });
 
       if (evt && evt.data.id && evt.data.hangoutLink && event.location === MeetLocationType) {
-        await calendar.events.patch({
-          // Update the same event but this time we know the hangout link
-          calendarId: selectedCalendar,
-          eventId: evt.data.id || "",
-          requestBody: {
-            description: getRichDescription({
-              ...event,
-              additionalInformation: { hangoutLink: evt.data.hangoutLink },
-            }),
-            location: getLocation({
-              videoCallData: event.videoCallData,
-              additionalInformation: {
-                ...event.additionalInformation,
-                hangoutLink: evt.data.hangoutLink,
-              },
-              location: event.location,
-              uid: event.uid,
-            }),
-          },
-        });
+        await this.addHangoutLinkToEvent(calendar, selectedCalendar, evt.data.id, evt.data.hangoutLink, event);
         return {
           uid: "",
           ...evt.data,
